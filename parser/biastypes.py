@@ -63,5 +63,5 @@ def cfNeighbours(btMap):
             ll = list(btMap[bt])
             ll.remove(item)
             cfn[item] = ll
-    cfnJSON = json.dumps(cfn)
-    return cfnJSON
+    # cfnJSON = json.dumps(cfn)
+    return cfn
