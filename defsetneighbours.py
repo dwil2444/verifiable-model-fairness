@@ -21,7 +21,7 @@ def main():
     df = getBiasTypeMap(f)
     cfn = cfNeighbours(df)
     with open(of, 'w', encoding='utf-8') as f:
-        json.dump(cfn, f)
+        json.dump(cfn, f, indent=4)
 
 
 if __name__ == "__main__":
