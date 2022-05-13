@@ -590,6 +590,59 @@ def load_datasets(device, opts):
         pickle.dump(attack_surface, outfile)
   return train_data, dev_data, word_mat, attack_surface
 
+def load_subdatasets(device, opts, social_group):
+  """
+  Loads text classification datasets given opts on the device and returns the dataset.
+  If a data cache is specified in opts and the cached data there is of the same class
+    as the one specified in opts, uses the cache. Otherwise reads from the raw dataset
+    files specified in OPTS.
+  Returns:
+    - train_data:  EntailmentDataset - Processed training dataset
+    - dev_data: Optional[EntailmentDataset] - Processed dev dataset if raw dev data was found or
+        dev_frac was specified in opts
+    - word_mat: torch.Tensor
+    - attack_surface: AttackSurface - defines the adversarial attack surface
+  """
+  data_class = ToyClassificationDataset if opts.use_toy_data else JigsawDataset # IMDBDataset
+  
+  fname = 'dev_data.pkl'
+  if social_group == 'female':
+    fname = 'test_female.pkl'
+  
+  try:
+    with open(os.path.join(opts.data_cache_dir, fname), 'rb') as infile:
+      dev_data = pickle.load(infile)
+      if not isinstance(dev_data, data_class):
+          raise Exception("Cached dataset of wrong class: {}".format(type(train_data)))
+    with open(os.path.join(opts.data_cache_dir, 'word_mat.pkl'), 'rb') as infile:
+      word_mat = pickle.load(infile)
+    with open(os.path.join(opts.data_cache_dir, 'attack_surface.pkl'), 'rb') as infile:
+      attack_surface = pickle.load(infile)
+    print("Loaded data from {}.".format(opts.data_cache_dir))
+  except Exception:
+    if opts.use_toy_data:
+      attack_surface = ToyClassificationAttackSurface(ToyClassificationDataset.VOCAB_LIST)
+    elif opts.use_lm:
+      attack_surface = attacks.LMConstrainedAttackSurface.from_files(
+          opts.neighbor_file, opts.imdb_lm_file)
+    else:
+      attack_surface = attacks.WordSubstitutionAttackSurface.from_file(opts.neighbor_file)
+    print('Reading dataset.')
+    raw_data = data_class.get_raw_data(opts.jigsaw_dir, social_group=social_group)
+    word_set = raw_data.get_word_set(attack_surface)
+    vocab, word_mat = vocabulary.Vocabulary.read_word_vecs(word_set, opts.glove_dir, opts.glove, device)
+    dev_data = data_class.from_raw_data(raw_data.dev_data, vocab, attack_surface,
+                                        downsample_to=opts.downsample_to,
+                                        downsample_shard=opts.downsample_shard,
+                                        truncate_to=opts.truncate_to)
+    if opts.data_cache_dir:
+      with open(os.path.join(opts.data_cache_dir, fname), 'wb') as outfile:
+        pickle.dump(dev_data, outfile)
+      with open(os.path.join(opts.data_cache_dir, 'word_mat.pkl'), 'wb') as outfile:
+        pickle.dump(word_mat, outfile)
+      with open(os.path.join(opts.data_cache_dir, 'attack_surface.pkl'), 'wb') as outfile:
+        pickle.dump(attack_surface, outfile)
+  return dev_data, word_mat, attack_surface
 
 def num_correct(model_output, gold_labels):
   """
@@ -617,6 +670,40 @@ def num_correct(model_output, gold_labels):
   )
   return num_correct, num_cert_correct
 
+def confusion_matrix(model_output, gold_labels):
+  """
+  Given the output of model and gold labels returns number of correct and certified correct
+  predictions
+  Args:
+    - model_output: output of the model, could be ibp.IntervalBoundedTensor or torch.Tensor
+    - gold_labels: torch.Tensor, should be of size 1 per sample, 1 for positive 0 for negative
+  Returns:
+    - num_correct: int - number of correct predictions from the actual model output
+    - num_cert_correct - number of bounds-certified correct predictions if the model_output was an
+        IntervalBoundedTensor, 0 otherwise.
+  """ 
+  gold_pos = sum(1 for i, y in enumerate(gold_labels) if y == 1)
+  gold_neg = sum(1 for i, y in enumerate(gold_labels) if y == 0)
+  
+  if isinstance(model_output, ibp.IntervalBoundedTensor):
+    logits = model_output.val
+    # tp_cert = sum(
+    #   all((b * (2 * y - 1)).item() > 0 for b in (model_output.lb[i], model_output.ub[i]))
+    #   for i, y in enumerate(gold_labels) if y == 1
+    # )
+  else:
+    logits = model_output
+    # tp_cert = 0
+  
+  tp = sum(
+    (logits[i] * (2 * y - 1)).item() > 0 for i, y in enumerate(gold_labels) if y == 1
+  ) 
+  tn = sum(
+    (logits[i] * (2 * y - 1)).item() > 0 for i, y in enumerate(gold_labels) if y == 0
+  )
+  fp = gold_neg - tn
+  fn = gold_pos - tp
+  return tp, fn, fp, tn
 
 def load_model(word_mat, device, opts):
   """
@@ -857,6 +944,8 @@ class JigsawDataset(TextClassificationDataset):
         fname = 'test.csv'
     elif split == 'train':
         fname = 'train.csv'
+    elif split == 'female':
+        fname = 'test_female.csv'
     else:
         fname = 'dev.csv'
 
@@ -896,10 +985,12 @@ class JigsawDataset(TextClassificationDataset):
     return data
     '''
   @classmethod
-  def get_raw_data(cls, jigsaw_dir, test=False):
+  def get_raw_data(cls, jigsaw_dir, test=False, social_group=''):
     train_data = cls.read_text(jigsaw_dir, 'train')
     if test:
       dev_data = cls.read_text(jigsaw_dir, 'test')
+    elif social_group == 'female':
+      dev_data = cls.read_text(jigsaw_dir, 'female')
     else:
       dev_data = cls.read_text(jigsaw_dir, 'dev')
     return RawClassificationDataset(train_data, dev_data)

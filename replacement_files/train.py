@@ -200,21 +200,30 @@ def test(task_class, model, name, dataset, device, show_certified=False, batch_s
       'name': name,
       'num_total': 0,
       'num_correct': 0,
+      'TPR': 0,
+      'FPR': 0,
       'num_cert_correct': 0,
       'clean_acc': 0.0,
       'cert_acc': 0.0,
       'loss': 0.0
   }
   data = dataset.get_loader(batch_size)
+  tp_fn = 0
+  fp_tn = 0
   with torch.no_grad():
     for batch in tqdm(data):
       batch = data_util.dict_batch_to_device(batch, device)
       out = model.forward(batch, cert_eps=1.0)
       results['loss'] += loss_func(out.val, batch['y']).item()
       num_correct, num_cert_correct = task_class.num_correct(out, batch['y'])
+      tp, fn, fp, tn = task_class.confusion_matrix(out, batch['y'])
+      tp_fn += tp + fn
+      fp_tn += fp + tn
       results["num_correct"] += num_correct
       results["num_cert_correct"] += num_cert_correct
       results['num_total'] += len(batch['y'])
+      results['TPR'] += tp
+      results['FPR'] += fp
     if aug_dataset:
       results['aug_loss'] = results['loss']
       results['aug_total'] = results['num_total']
@@ -227,6 +236,8 @@ def test(task_class, model, name, dataset, device, show_certified=False, batch_s
         num_correct, num_cert_correct = task_class.num_correct(out, batch['y'])
         results["aug_correct"] += num_correct
         results['aug_total'] += len(batch['y'])
+  results['TPR'] = results['TPR'] / tp_fn
+  results['FPR'] = results['FPR'] / fp_tn
   results['clean_acc'] = 100 * results['num_correct'] / results['num_total']
   results['cert_acc'] = 100 * results['num_cert_correct'] / results['num_total']
   out_str = "  {name} loss = {loss:.2f}; accuracy: {num_correct}/{num_total} = {clean_acc:.2f}, certified {num_cert_correct}/{num_total} = {cert_acc:.2f}".format(**results)
@@ -242,7 +253,6 @@ def test(task_class, model, name, dataset, device, show_certified=False, batch_s
         results['num_adv_correct'], len(dataset), results['adv_acc'])
   print(out_str)
   return results
-
 
 def parse_args():
   parser = argparse.ArgumentParser()
@@ -319,6 +329,9 @@ def parse_args():
   # Other
   parser.add_argument('--rng-seed', type=int, default=123456)
   parser.add_argument('--torch-seed', type=int, default=1234567)
+  
+  # Social groups
+  parser.add_argument('--social-groups', type=str, default='')
 
   if len(sys.argv) == 1:
     parser.print_help()
@@ -343,6 +356,14 @@ def main():
     if not os.path.exists(OPTS.data_cache_dir):
         os.makedirs(OPTS.data_cache_dir)
   train_data, dev_data, word_mat, attack_surface = task_class.load_datasets(device, OPTS)
+  
+  social_groups = OPTS.social_groups.split()
+  subgroup_datasets = []
+  for social_group in social_groups:
+    subgroup_data, _, _ = task_class.load_subdatasets(device, OPTS, social_group)
+    subgroup_datasets.append((social_group, subgroup_data))
+  print("len(subgroup_datasets)", len(subgroup_datasets))
+  
   print('Initializing model.')
   model = task_class.load_model(word_mat, device, OPTS)
   if OPTS.num_epochs > 0:
@@ -370,10 +391,16 @@ def main():
                                               pop_size=OPTS.adv_pop_size)
     dev_results = test(task_class, model, 'Dev', dev_data, device, 
                        adversary=adversary, batch_size=OPTS.batch_size)
+    
     results = {
         'train': train_results,
         'dev': dev_results
     }
+
+    for social_group, subgroup_data in subgroup_datasets:
+        social_results = test(task_class, model, social_group, subgroup_data, device, adversary=adversary, batch_size=OPTS.batch_size)
+        results[social_group] = social_results
+    
     with open(os.path.join(OPTS.out_dir, 'test_results.json'), 'w') as f:
       json.dump(results, f)
   else:
