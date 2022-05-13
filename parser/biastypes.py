@@ -1,5 +1,23 @@
 #!../venv/bin/python
 import json
+import pandas as pd
+# from nltk.corpus import words
+
+
+def sanitizeString(str):
+    """
+    :param str: string input (expected to contain
+    punctuation)
+    :return: string with punctuation stripped
+    """
+    i = 0
+    for cahr in str:
+        if not cahr.isalpha():
+            break
+        else:
+            i += 1
+    sub = str[0:i]
+    return sub.lower()
 
 
 def loadJSONFile(f):
@@ -37,10 +55,27 @@ def getBiasTypeMap(df):
     value: list of all targets for that race
     type
     """
+
+
+    addList = []
+    # for ex in extras:
+    #     add = sanitizeString(ex[0])
+    #     addList.append(ex)
     bt = getBiasTypes(df)
     btMap = {}
     for item in bt:
         btMap[item] = []
+    # extra words taken from:
+    # https://github.com/XuhuiZhou/Toxic_Debias/blob/main/data/word_based_bias_list.csv
+    btMap['orientation'] = ['lesbians', 'gays',
+                            'bisexuals', 'transgender', 'trans',
+                            'queers', 'lgbt', 'lgbt', 'homosexual',
+                            'heterosexual']
+    btMap['gender'] = ['woman', 'females', 'girls', 'non-binary']
+    btMap['race'] = ['africans', 'african-americans', 'blacks',
+                    'hispanics', 'latino', 'latina', 'latinx', 'mexicans',
+                    'indians', 'middle-eastern']
+    btMap['religion'] = ['muslims', 'arabs', 'jews']
     targets = df['data']['intersentence']
     for target in targets:
         bt = target['bias_type']
