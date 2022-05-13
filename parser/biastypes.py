@@ -82,6 +82,7 @@ def getBiasTypeMap(df):
         tt = target['target']
         if tt not in btMap[bt]:
             btMap[bt].append(tt)
+    del btMap['profession']
     return btMap
 
 
